@@ -1,0 +1,72 @@
+name: Owned cache-mode boundary check
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  seed:
+    runs-on: ubuntu-latest
+    cache-mode: write
+    steps:
+      - name: Create synthetic seed
+        run: |
+          mkdir -p cache-seed
+          printf 'OWNED_SEED_%s\n' "$GITHUB_RUN_ID" > cache-seed/marker.txt
+      - name: Save control cache
+        uses: actions/cache/save@v4
+        with:
+          path: cache-seed
+          key: h1-seed-${{ github.run_id }}
+
+  restricted:
+    needs: seed
+    runs-on: ubuntu-latest
+    cache-mode: read
+    steps:
+      - name: Restore control cache
+        id: restore_seed
+        uses: actions/cache/restore@v4
+        with:
+          path: cache-seed
+          key: h1-seed-${{ github.run_id }}
+      - name: Verify read control and make synthetic payload
+        run: |
+          test '${{ steps.restore_seed.outputs.cache-hit }}' = 'true'
+          test "$(cat cache-seed/marker.txt)" = "OWNED_SEED_$GITHUB_RUN_ID"
+          mkdir -p cache-restricted
+          printf 'OWNED_RESTRICTED_%s\n' "$GITHUB_RUN_ID" > cache-restricted/marker.txt
+      - name: Attempt forbidden save with environment override
+        id: attempt_save
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        env:
+          ACTIONS_CACHE_MODE: write
+        with:
+          path: cache-restricted
+          key: h1-restricted-${{ github.run_id }}
+      - name: Record save step result
+        run: echo 'save_step_outcome=${{ steps.attempt_save.outcome }}'
+
+  verify:
+    needs: restricted
+    runs-on: ubuntu-latest
+    cache-mode: read
+    steps:
+      - name: Try restoring the forbidden cache from a separate job
+        id: restore_restricted
+        uses: actions/cache/restore@v4
+        with:
+          path: cache-restricted
+          key: h1-restricted-${{ github.run_id }}
+      - name: Record cross-job result without secrets
+        run: |
+          echo 'restricted_cache_hit=${{ steps.restore_restricted.outputs.cache-hit }}'
+          if [ -f cache-restricted/marker.txt ]; then
+            test "$(cat cache-restricted/marker.txt)" = "OWNED_RESTRICTED_$GITHUB_RUN_ID"
+            echo 'restricted_marker_match=true'
+          else
+            echo 'restricted_marker_match=false'
+          fi
