@@ -1,0 +1,31 @@
+name: H1 owned ruleset boundary control
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  one-owned-file:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Write a harmless marker with the workflow token
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          target="repos/${GITHUB_REPOSITORY}/contents/h1-ruleset-boundary.txt"
+          encoded="$(printf 'H1 self-owned ruleset check run %s\n' "$GITHUB_RUN_ID" | base64 -w0)"
+          current_sha="$(gh api "$target" --jq .sha 2>/dev/null || true)"
+          args=(-X PUT "$target" -f message="H1 owned ruleset boundary control" -f content="$encoded" -f branch=main)
+          if [[ -n "$current_sha" ]]; then
+            args+=(-f sha="$current_sha")
+          fi
+          if gh api "${args[@]}" --jq .commit.sha > "$RUNNER_TEMP/result.txt" 2> "$RUNNER_TEMP/error.txt"; then
+            echo "probe_result=write_allowed"
+          else
+            echo "probe_result=write_denied"
+            sed -n '1,15p' "$RUNNER_TEMP/error.txt"
+          fi
